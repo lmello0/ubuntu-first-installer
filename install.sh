@@ -100,12 +100,22 @@ OS=$(uname | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
 case "$ARCH" in
-  x86_64) ARCH="amd64" ;;
-  aarch64 | arm64) ARCH="arm64" ;;
-  *) echo "Unsupported architecture: $ARCH"; exit 1 ;;
+  x86_64)
+    ARCH="amd64"
+    ;;
+  aarch64|arm64)
+    ARCH="arm64"
+    ;;
+  armv6l|armv7l)
+    ARCH="armv6l"
+    ;;
+  *)
+    echo "Unsupported architecture: $ARCH"
+    exit1
+    ;;
 esac
 
-LATEST_GO=$(curl -s https://go.dev/VERSION?m=text)
+LATEST_GO=$(curl -s https://go.dev/VERSION?m=text | head -n 1)
 GO_FILE="${LATEST_GO}.${OS}-${ARCH}.tar.gz"
 GO_URL="https://go.dev/dl/${GO_FILE}"
 
