@@ -1,7 +1,18 @@
 #!/usr/bin/env bash
 set -e
 
-echo "=== Ubuntu First Installer ==="
+echo "=== Ubuntu Global Installer ==="
+
+# Check if running with sudo
+if [ "$EUID" -ne 0 ]; then
+  echo "This script needs to be run with sudo for global installations."
+  echo "Please run: sudo $0"
+  exit 1
+fi
+
+# Get the actual user (not root) who invoked sudo
+ACTUAL_USER="${SUDO_USER:-$USER}"
+ACTUAL_HOME=$(getent passwd "$ACTUAL_USER" | cut -d: -f6)
 
 ################################
 # Base packages
@@ -43,47 +54,46 @@ while [[ -z "$GIT_EMAIL" ]]; do
   read -rp "Enter your Git email: " GIT_EMAIL
 done
 
-git config --global user.name "$GIT_NAME"
-git config --global user.email "$GIT_EMAIL"
-git config --global init.defaultBranch main
-git config --global pull.rebase false
-git config --global push.autoSetupRemote true
-git config --global core.editor "vim"
+sudo -u "$ACTUAL_USER" git config --global user.name "$GIT_NAME"
+sudo -u "$ACTUAL_USER" git config --global user.email "$GIT_EMAIL"
+sudo -u "$ACTUAL_USER" git config --global init.defaultBranch main
+sudo -u "$ACTUAL_USER" git config --global pull.rebase false
+sudo -u "$ACTUAL_USER" git config --global push.autoSetupRemote true
+sudo -u "$ACTUAL_USER" git config --global core.editor "vim"
 
 echo "Git configured:"
-git config --global --list | grep user || true
+sudo -u "$ACTUAL_USER" git config --global --list | grep user || true
 
 ################################
 # Zsh + Oh My Zsh (non-interactive)
 ################################
 echo "Installing Oh My Zsh..."
-sudo chsh -s "$(which zsh)" "$USER" || echo "Warning: Could not change shell. Run 'chsh -s \$(which zsh)' manually."
+sudo chsh -s "$(which zsh)" "$ACTUAL_USER" || echo "Warning: Could not change shell. Run 'chsh -s \$(which zsh)' manually."
 
-if [ ! -d "$HOME/.oh-my-zsh" ]; then
-  RUNZSH=no CHSH=no KEEP_ZSHRC=yes \
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+if [ ! -d "$ACTUAL_HOME/.oh-my-zsh" ]; then
+  sudo -u "$ACTUAL_USER" sh -c "RUNZSH=no CHSH=no KEEP_ZSHRC=yes sh -c \"\$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)\""
 fi
 
 ################################
 # Zsh plugins
 ################################
 echo "Installing Zsh plugins..."
-ZSH_CUSTOM=${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}
+ZSH_CUSTOM="$ACTUAL_HOME/.oh-my-zsh/custom"
 
 [ ! -d "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting" ] && \
-  git clone https://github.com/zsh-users/zsh-syntax-highlighting.git \
+  sudo -u "$ACTUAL_USER" git clone https://github.com/zsh-users/zsh-syntax-highlighting.git \
   "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting"
 
 [ ! -d "$ZSH_CUSTOM/plugins/zsh-autosuggestions" ] && \
-  git clone https://github.com/zsh-users/zsh-autosuggestions \
+  sudo -u "$ACTUAL_USER" git clone https://github.com/zsh-users/zsh-autosuggestions \
   "$ZSH_CUSTOM/plugins/zsh-autosuggestions"
 
 ################################
 # .zshrc config
 ################################
-ZSHRC="$HOME/.zshrc"
+ZSHRC="$ACTUAL_HOME/.zshrc"
 
-# Add plugins
+# Add plugins (idempotent)
 if ! grep -q "zsh-syntax-highlighting" "$ZSHRC"; then
   sed -i 's/^plugins=(/plugins=(zsh-syntax-highlighting zsh-autosuggestions /' "$ZSHRC"
 fi
@@ -92,9 +102,9 @@ fi
 grep -q "alias python=python3" "$ZSHRC" || echo "alias python=python3" >> "$ZSHRC"
 
 ################################
-# Go (latest)
+# Go (latest) - GLOBAL INSTALL
 ################################
-echo "Installing Go (latest)..."
+echo "Installing Go globally (latest)..."
 
 OS=$(uname | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
@@ -111,7 +121,7 @@ case "$ARCH" in
     ;;
   *)
     echo "Unsupported architecture: $ARCH"
-    exit1
+    exit 1
     ;;
 esac
 
@@ -124,40 +134,67 @@ sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf "$GO_FILE"
 rm -f "$GO_FILE"
 
-if ! grep -q "/usr/local/go/bin" /etc/profile; then
-  echo "export PATH=$PATH:/usr/local/go/bin" | sudo tee -a /etc/profile
+# Add Go to system-wide PATH
+if ! grep -q "/usr/local/go/bin" /etc/environment; then
+  echo 'PATH="/usr/local/go/bin:$PATH"' >> /etc/environment
 fi
 
+if ! grep -q "/usr/local/go/bin" /etc/profile; then
+  echo 'export PATH=$PATH:/usr/local/go/bin' | tee -a /etc/profile
+fi
+
+# Create symlink for easy sudo access
+ln -sf /usr/local/go/bin/go /usr/local/bin/go
+ln -sf /usr/local/go/bin/gofmt /usr/local/bin/gofmt
+
+# Also add to current user's .zshrc
 grep -q "/usr/local/go/bin" "$ZSHRC" || echo 'export PATH=$PATH:/usr/local/go/bin' >> "$ZSHRC"
 
 ################################
-# Rust + Cargo
+# Rust + Cargo - GLOBAL INSTALL
 ################################
-echo "Installing Rust..."
+echo "Installing Rust globally..."
 
+# Create directories first
+mkdir -p /opt/rust/rustup /opt/rust/cargo
+chown -R root:root /opt/rust
+
+# Set environment for installation
 export RUSTUP_HOME=/opt/rust/rustup
 export CARGO_HOME=/opt/rust/cargo
 
-sudo mkdir -p /opt/rust/rustup /opt/rust/cargo
-sudo chown -R root:root /opt/rust
-
-if ! command -v rustup >/dev/null 2>&1; then
-  curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path
+if [ ! -f "/opt/rust/cargo/bin/rustup" ]; then
+  curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path \
+    --default-toolchain stable \
+    --profile default
 fi
 
-sudo /opt/rust/cargo/bin/rustup self update
-sudo /opt/rust/cargo/bin/rustup update stable
-sudo /opt/rust/cargo/bin/rustup default stable
+# Update and set default
+/opt/rust/cargo/bin/rustup self update
+/opt/rust/cargo/bin/rustup update stable
+/opt/rust/cargo/bin/rustup default stable
+
+# Add Rust to system-wide PATH
+if ! grep -q "/opt/rust/cargo/bin" /etc/environment; then
+  sed -i 's|PATH="\(.*\)"|PATH="/opt/rust/cargo/bin:\1"|' /etc/environment 2>/dev/null || \
+  echo 'PATH="/opt/rust/cargo/bin:$PATH"' >> /etc/environment
+fi
 
 if ! grep -q "/opt/rust/cargo/bin" /etc/profile; then
-  cat << 'EOF' | sudo tee -a /etc/profile
+  cat << 'EOF' | tee -a /etc/profile
 export RUSTUP_HOME=/opt/rust/rustup
 export CARGO_HOME=/opt/rust/cargo
 export PATH=$PATH:/opt/rust/cargo/bin
 EOF
 fi
 
-if ! grep -q "/opt/rust/cargo/bin" "$ZHRC"; then
+# Create symlinks for easy sudo access
+ln -sf /opt/rust/cargo/bin/cargo /usr/local/bin/cargo
+ln -sf /opt/rust/cargo/bin/rustc /usr/local/bin/rustc
+ln -sf /opt/rust/cargo/bin/rustup /usr/local/bin/rustup
+
+# Also add to current user's .zshrc
+if ! grep -q "/opt/rust/cargo/bin" "$ZSHRC"; then
   cat >> "$ZSHRC" << 'EOF'
 export RUSTUP_HOME=/opt/rust/rustup
 export CARGO_HOME=/opt/rust/cargo
@@ -165,62 +202,84 @@ export PATH=$PATH:/opt/rust/cargo/bin
 EOF
 fi
 
+# Source for current session
 export PATH=$PATH:/opt/rust/cargo/bin
 
 ################################
-# bat via cargo
+# bat via cargo - GLOBAL
 ################################
-echo "Installing bat..."
+echo "Installing bat globally..."
 if ! command -v bat >/dev/null 2>&1; then
-  sudo /opt/rust/cargo/bin/cargo install bat
+  /opt/rust/cargo/bin/cargo install bat
 fi
 
+# Create symlink
+ln -sf /opt/rust/cargo/bin/bat /usr/local/bin/bat
+
 # Add bat alias
-if command -v bat >/dev/null 2>&1; then
+if command -v bat >/dev/null 2>&1 || [ -f "/opt/rust/cargo/bin/bat" ]; then
   grep -q "alias cat=bat" "$ZSHRC" || echo "alias cat=bat" >> "$ZSHRC"
 fi
 
 ################################
-# eza via cargo
+# eza via cargo - GLOBAL
 ################################
-echo "Installing eza..."
+echo "Installing eza globally..."
 if ! command -v eza >/dev/null 2>&1; then
-  sudo /opt/rust/cargo/bin/cargo install eza
+  /opt/rust/cargo/bin/cargo install eza
 fi
 
+# Create symlink
+ln -sf /opt/rust/cargo/bin/eza /usr/local/bin/eza
+
 # Add eza alias
-if command -v eza >/dev/null 2>&1; then
+if command -v eza >/dev/null 2>&1 || [ -f "/opt/rust/cargo/bin/eza" ]; then
   grep -q "alias ls=eza" "$ZSHRC" || echo "alias ls=eza" >> "$ZSHRC"
 fi
 
 ################################
-# Python (latest) via pyenv
+# Python (latest) - GLOBAL INSTALL
 ################################
-echo "Installing Python via pyenv..."
+echo "Installing Python globally via pyenv..."
 
+# Install pyenv globally to /opt/pyenv
 export PYENV_ROOT="/opt/pyenv"
 
 if [ ! -d "$PYENV_ROOT" ]; then
-  sudo mkdir -p /opt/pyenv
-  sudo git clone https://github.com/pyenv/pyenv.git /opt/pyenv
-  sudo chown -R root:root /opt/pyenv
+  mkdir -p /opt/pyenv
+  git clone https://github.com/pyenv/pyenv.git /opt/pyenv
+  chown -R root:root /opt/pyenv
 fi
 
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 
+# Add pyenv to system-wide PATH
+if ! grep -q "PYENV_ROOT" /etc/environment; then
+  sed -i 's|PATH="\(.*\)"|PATH="/opt/pyenv/bin:\1"|' /etc/environment 2>/dev/null || \
+  echo 'PATH="/opt/pyenv/bin:$PATH"' >> /etc/environment
+fi
+
 if ! grep -q "PYENV_ROOT" /etc/profile; then
-  cat << 'EOF' | sudo tee -a /etc/profile
+  cat << 'EOF' | tee -a /etc/profile
 export PYENV_ROOT="/opt/pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 EOF
 fi
 
+# Create sudoers file to preserve PYENV environment
+cat << 'EOF' > /etc/sudoers.d/pyenv
+Defaults env_keep += "PYENV_ROOT"
+Defaults secure_path="/opt/pyenv/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+EOF
+chmod 0440 /etc/sudoers.d/pyenv
+
+# Also add to current user's .zshrc
 if ! grep -q "PYENV_ROOT" "$ZSHRC"; then
   cat >> "$ZSHRC" << 'EOF'
 
-#pyenv
+# pyenv
 export PYENV_ROOT="/opt/pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
@@ -228,25 +287,45 @@ EOF
 fi
 
 LATEST_PYTHON=$(pyenv install --list | grep -E "^\s*[0-9]+\.[0-9]+\.[0-9]+$" | tail -1 | tr -d ' ')
-echo "Installing Python $LATEST_PYTHON..."
-sudo -E pyenv install -s "$LATEST_PYTHON"
-sudo -E pyenv global "$LATEST_PYTHON"
+echo "Installing Python $LATEST_PYTHON globally..."
+pyenv install -s "$LATEST_PYTHON"
+pyenv global "$LATEST_PYTHON"
+
+# Create symlinks for easy sudo access
+PYTHON_VERSION=$(pyenv global)
+ln -sf /opt/pyenv/versions/$PYTHON_VERSION/bin/python3 /usr/local/bin/python
+ln -sf /opt/pyenv/versions/$PYTHON_VERSION/bin/python3 /usr/local/bin/python3
+ln -sf /opt/pyenv/versions/$PYTHON_VERSION/bin/pip3 /usr/local/bin/pip
+ln -sf /opt/pyenv/versions/$PYTHON_VERSION/bin/pip3 /usr/local/bin/pip3
 
 ################################
-# pipenv
+# pipenv - GLOBAL INSTALL
 ################################
-echo "Installing pipenv..."
-sudo -E python -m pip install --upgrade pip setuptools wheel
-sudo -E python -m pip install --user pipenv
+echo "Installing pipenv globally..."
+python -m pip install --upgrade pip setuptools wheel
+python -m pip install pipenv
+
+# Create symlink for pipenv
+ln -sf /opt/pyenv/versions/$PYTHON_VERSION/bin/pipenv /usr/local/bin/pipenv
+
+################################
+# ipython - GLOBAL INSTALL
+################################
+echo "Installing ipython globally..."
+python -m pip install ipython
+
+# Create symlink for ipython
+ln -sf /opt/pyenv/versions/$PYTHON_VERSION/bin/ipython /usr/local/bin/pipenv
 
 ################################
 # SSH key generation
 ################################
-SSH_KEY="$HOME/.ssh/id_ed25519"
+SSH_KEY="$ACTUAL_HOME/.ssh/id_ed25519"
 
 if [ ! -f "$SSH_KEY" ]; then
   echo "Generating SSH key..."
-  ssh-keygen -t ed25519 -C "$GIT_EMAIL" -f "$SSH_KEY" -N ""
+  sudo -u "$ACTUAL_USER" mkdir -p "$ACTUAL_HOME/.ssh"
+  sudo -u "$ACTUAL_USER" ssh-keygen -t ed25519 -C "$GIT_EMAIL" -f "$SSH_KEY" -N ""
 fi
 
 ################################
@@ -276,11 +355,11 @@ echo "Please follow the prompts to authenticate."
 echo ""
 read -rp "Press Enter to continue..."
 
-gh auth login
+sudo -u "$ACTUAL_USER" gh auth login
 
 echo ""
 echo "Uploading SSH key to GitHub..."
-gh ssh-key add "$SSH_KEY.pub" --title "$(hostname)-$(date +%Y%m%d)" || echo "Warning: Could not upload SSH key. You may need to add it manually."
+sudo -u "$ACTUAL_USER" gh ssh-key add "$SSH_KEY.pub" --title "$(hostname)-$(date +%Y%m%d)" || echo "Warning: Could not upload SSH key. You may need to add it manually."
 
 ################################
 # Done
@@ -289,6 +368,25 @@ echo ""
 echo "=================================="
 echo "Installation complete!"
 echo "=================================="
-echo "Shell changed to Zsh. Please log out and log back in,"
-echo "or run: exec zsh"
+echo "All tools installed globally:"
+echo "  - Go: /usr/local/go"
+echo "  - Rust: /opt/rust"
+echo "  - Python (pyenv): /opt/pyenv"
+echo ""
+echo "Symlinks created in /usr/local/bin for sudo access:"
+echo "  - python, python3, pip, pip3"
+echo "  - go, cargo, rustc, rustup"
+echo "  - pipenv, bat, eza"
+echo ""
+echo "You can now use these commands with sudo:"
+echo "  sudo python --version"
+echo "  sudo go version"
+echo "  sudo cargo --version"
+echo "  sudo pipenv --version"
+echo ""
+echo "To use immediately in your shell, run:"
+echo "  source /etc/profile"
+echo "  exec zsh"
+echo ""
+echo "Or simply log out and log back in."
 echo "=================================="
