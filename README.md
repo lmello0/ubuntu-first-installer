@@ -3,5 +3,5 @@
 To run, execute:
 
 ```bash
-sudo bash <(curl -fsSL https://raw.githubusercontent.com/lmello0/ubuntu-first-installer/main/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/lmello0/ubuntu-first-installer/main/install.sh)
 ```
