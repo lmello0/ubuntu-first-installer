@@ -6,6 +6,7 @@ echo "=== Ubuntu First Installer ==="
 ################################
 # Base packages
 ################################
+echo "Installing base packages..."
 sudo apt update
 sudo apt install -y \
   curl \
@@ -34,8 +35,13 @@ sudo apt install -y \
 # Git config (prompted)
 ################################
 echo "Configuring Git..."
-read -rp "Enter your Git name: " GIT_NAME
-read -rp "Enter your Git email: " GIT_EMAIL
+while [[ -z "$GIT_NAME" ]]; do
+  read -rp "Enter your Git name: " GIT_NAME
+done
+
+while [[ -z "$GIT_EMAIL" ]]; do
+  read -rp "Enter your Git email: " GIT_EMAIL
+done
 
 git config --global user.name "$GIT_NAME"
 git config --global user.email "$GIT_EMAIL"
@@ -45,13 +51,13 @@ git config --global push.autoSetupRemote true
 git config --global core.editor "vim"
 
 echo "Git configured:"
-git config --global --list | grep user
+git config --global --list | grep user || true
 
 ################################
 # Zsh + Oh My Zsh (non-interactive)
 ################################
 echo "Installing Oh My Zsh..."
-chsh -s "$(which zsh)"
+sudo chsh -s "$(which zsh)" "$USER" || echo "Warning: Could not change shell. Run 'chsh -s \$(which zsh)' manually."
 
 if [ ! -d "$HOME/.oh-my-zsh" ]; then
   RUNZSH=no CHSH=no KEEP_ZSHRC=yes \
@@ -61,6 +67,7 @@ fi
 ################################
 # Zsh plugins
 ################################
+echo "Installing Zsh plugins..."
 ZSH_CUSTOM=${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}
 
 [ ! -d "$ZSH_CUSTOM/plugins/zsh-syntax-highlighting" ] && \
@@ -76,10 +83,13 @@ ZSH_CUSTOM=${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}
 ################################
 ZSHRC="$HOME/.zshrc"
 
-sed -i 's/plugins=(\(.*\))/plugins=(\1 zsh-syntax-highlighting zsh-autosuggestions)/' "$ZSHRC" || true
+# Add plugins (idempotent)
+if ! grep -q "zsh-syntax-highlighting" "$ZSHRC"; then
+  sed -i 's/^plugins=(/plugins=(zsh-syntax-highlighting zsh-autosuggestions /' "$ZSHRC"
+fi
 
+# Add python alias
 grep -q "alias python=python3" "$ZSHRC" || echo "alias python=python3" >> "$ZSHRC"
-grep -q "alias cat=bat" "$ZSHRC" || echo "alias cat=bat" >> "$ZSHRC"
 
 ################################
 # Go (latest)
@@ -102,12 +112,14 @@ GO_URL="https://go.dev/dl/${GO_FILE}"
 curl -LO "$GO_URL"
 sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf "$GO_FILE"
+rm -f "$GO_FILE"
 
 grep -q "/usr/local/go/bin" "$ZSHRC" || echo 'export PATH=$PATH:/usr/local/go/bin' >> "$ZSHRC"
 
 ################################
 # Rust + Cargo
 ################################
+echo "Installing Rust..."
 if ! command -v rustup >/dev/null 2>&1; then
   curl https://sh.rustup.rs -sSf | sh -s -- -y
 fi
@@ -118,16 +130,28 @@ rustup self update
 rustup update stable
 rustup default stable
 
+# Add Rust to .zshrc
+if ! grep -q ".cargo/env" "$ZSHRC"; then
+  echo 'source "$HOME/.cargo/env"' >> "$ZSHRC"
+fi
+
 ################################
 # bat via cargo
 ################################
+echo "Installing bat..."
 if ! command -v bat >/dev/null 2>&1; then
   cargo install bat
+fi
+
+# Add bat alias (now that bat is installed)
+if command -v bat >/dev/null 2>&1; then
+  grep -q "alias cat=bat" "$ZSHRC" || echo "alias cat=bat" >> "$ZSHRC"
 fi
 
 ################################
 # Python (latest) via pyenv
 ################################
+echo "Installing Python via pyenv..."
 if [ ! -d "$HOME/.pyenv" ]; then
   curl https://pyenv.run | bash
 fi
@@ -136,13 +160,26 @@ export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 
+# Add pyenv to .zshrc
+if ! grep -q "pyenv init" "$ZSHRC"; then
+  cat >> "$ZSHRC" << 'EOF'
+
+# pyenv
+export PYENV_ROOT="$HOME/.pyenv"
+export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init -)"
+EOF
+fi
+
 LATEST_PYTHON=$(pyenv install --list | grep -E "^\s*[0-9]+\.[0-9]+\.[0-9]+$" | tail -1 | tr -d ' ')
+echo "Installing Python $LATEST_PYTHON..."
 pyenv install -s "$LATEST_PYTHON"
 pyenv global "$LATEST_PYTHON"
 
 ################################
 # pipenv
 ################################
+echo "Installing pipenv..."
 python -m pip install --upgrade pip setuptools wheel
 python -m pip install --user pipenv
 
@@ -155,9 +192,6 @@ if [ ! -f "$SSH_KEY" ]; then
   echo "Generating SSH key..."
   ssh-keygen -t ed25519 -C "$GIT_EMAIL" -f "$SSH_KEY" -N ""
 fi
-
-eval "$(ssh-agent -s)"
-ssh-add "$SSH_KEY"
 
 ################################
 # GitHub CLI + upload key
@@ -177,16 +211,28 @@ if ! command -v gh >/dev/null 2>&1; then
   sudo apt install -y gh
 fi
 
-echo "Authenticating with GitHub..."
+echo ""
+echo "=================================="
+echo "GitHub Authentication Required"
+echo "=================================="
+echo "The script will now open GitHub CLI authentication."
+echo "Please follow the prompts to authenticate."
+echo ""
+read -rp "Press Enter to continue..."
+
 gh auth login
 
+echo ""
 echo "Uploading SSH key to GitHub..."
-gh ssh-key add "$SSH_KEY.pub" --title "$(hostname)-$(date +%Y%m%d)"
+gh ssh-key add "$SSH_KEY.pub" --title "$(hostname)-$(date +%Y%m%d)" || echo "Warning: Could not upload SSH key. You may need to add it manually."
 
 ################################
 # Done
 ################################
+echo ""
 echo "=================================="
 echo "Installation complete!"
-echo "Restart your terminal or run: exec zsh"
+echo "=================================="
+echo "Shell changed to Zsh. Please log out and log back in,"
+echo "or run: exec zsh"
 echo "=================================="
