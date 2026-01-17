@@ -83,7 +83,7 @@ ZSH_CUSTOM=${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}
 ################################
 ZSHRC="$HOME/.zshrc"
 
-# Add plugins (idempotent)
+# Add plugins
 if ! grep -q "zsh-syntax-highlighting" "$ZSHRC"; then
   sed -i 's/^plugins=(/plugins=(zsh-syntax-highlighting zsh-autosuggestions /' "$ZSHRC"
 fi
@@ -124,33 +124,55 @@ sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf "$GO_FILE"
 rm -f "$GO_FILE"
 
+if ! grep -q "/usr/local/go/bin" /etc/profile; then
+  echo "export PATH=$PATH:/usr/local/go/bin" | sudo tee -a /etc/profile
+fi
+
 grep -q "/usr/local/go/bin" "$ZSHRC" || echo 'export PATH=$PATH:/usr/local/go/bin' >> "$ZSHRC"
 
 ################################
 # Rust + Cargo
 ################################
 echo "Installing Rust..."
+
+export RUSTUP_HOME=/opt/rust/rustup
+export CARGO_HOME=/opt/rust/cargo
+
+sudo mkdir -p /opt/rust/rustup /opt/rust/cargo
+sudo chown -R root:root /opt/rust
+
 if ! command -v rustup >/dev/null 2>&1; then
-  curl https://sh.rustup.rs -sSf | sh -s -- -y
+  curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path
 fi
 
-source "$HOME/.cargo/env"
+sudo /opt/rust/cargo/bin/rustup self update
+sudo /opt/rust/cargo/bin/rustup update stable
+sudo /opt/rust/cargo/bin/rustup default stable
 
-rustup self update
-rustup update stable
-rustup default stable
-
-# Add Rust to .zshrc
-if ! grep -q ".cargo/env" "$ZSHRC"; then
-  echo 'source "$HOME/.cargo/env"' >> "$ZSHRC"
+if ! grep -q "/opt/rust/cargo/bin" /etc/profile; then
+  cat << 'EOF' | sudo tee -a /etc/profile
+export RUSTUP_HOME=/opt/rust/rustup
+export CARGO_HOME=/opt/rust/cargo
+export PATH=$PATH:/opt/rust/cargo/bin
+EOF
 fi
+
+if ! grep -q "/opt/rust/cargo/bin" "$ZHRC"; then
+  cat >> "$ZSHRC" << 'EOF'
+export RUSTUP_HOME=/opt/rust/rustup
+export CARGO_HOME=/opt/rust/cargo
+export PATH=$PATH:/opt/rust/cargo/bin
+EOF
+fi
+
+export PATH=$PATH:/opt/rust/cargo/bin
 
 ################################
 # bat via cargo
 ################################
 echo "Installing bat..."
 if ! command -v bat >/dev/null 2>&1; then
-  cargo install bat
+  sudo /opt/rust/cargo/bin/cargo install bat
 fi
 
 # Add bat alias
@@ -163,7 +185,7 @@ fi
 ################################
 echo "Installing eza..."
 if ! command -v eza >/dev/null 2>&1; then
-  cargo install eza
+  sudo /opt/rust/cargo/bin/cargo install eza
 fi
 
 # Add eza alias
@@ -175,20 +197,31 @@ fi
 # Python (latest) via pyenv
 ################################
 echo "Installing Python via pyenv..."
-if [ ! -d "$HOME/.pyenv" ]; then
-  curl https://pyenv.run | bash
+
+export PYENV_ROOT="/opt/pyenv"
+
+if [ ! -d "$PYENV_ROOT" ]; then
+  sudo mkdir -p /opt/pyenv
+  sudo git clone https://github.com/pyenv/pyenv.git /opt/pyenv
+  sudo chown -R root:root /opt/pyenv
 fi
 
-export PYENV_ROOT="$HOME/.pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 
-# Add pyenv to .zshrc
-if ! grep -q "pyenv init" "$ZSHRC"; then
+if ! grep -q "PYENV_ROOT" /etc/profile; then
+  cat << 'EOF' | sudo tee -a /etc/profile
+export PYENV_ROOT="/opt/pyenv"
+export PATH="$PYENV_ROOT/bin:$PATH"
+eval "$(pyenv init -)"
+EOF
+fi
+
+if ! grep -q "PYENV_ROOT" "$ZSHRC"; then
   cat >> "$ZSHRC" << 'EOF'
 
-# pyenv
-export PYENV_ROOT="$HOME/.pyenv"
+#pyenv
+export PYENV_ROOT="/opt/pyenv"
 export PATH="$PYENV_ROOT/bin:$PATH"
 eval "$(pyenv init -)"
 EOF
@@ -196,15 +229,15 @@ fi
 
 LATEST_PYTHON=$(pyenv install --list | grep -E "^\s*[0-9]+\.[0-9]+\.[0-9]+$" | tail -1 | tr -d ' ')
 echo "Installing Python $LATEST_PYTHON..."
-pyenv install -s "$LATEST_PYTHON"
-pyenv global "$LATEST_PYTHON"
+sudo -E pyenv install -s "$LATEST_PYTHON"
+sudo -E pyenv global "$LATEST_PYTHON"
 
 ################################
 # pipenv
 ################################
 echo "Installing pipenv..."
-python -m pip install --upgrade pip setuptools wheel
-python -m pip install --user pipenv
+sudo -E python -m pip install --upgrade pip setuptools wheel
+sudo -E python -m pip install --user pipenv
 
 ################################
 # SSH key generation
