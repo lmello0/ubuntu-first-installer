@@ -153,9 +153,22 @@ if ! command -v bat >/dev/null 2>&1; then
   cargo install bat
 fi
 
-# Add bat alias (now that bat is installed)
+# Add bat alias
 if command -v bat >/dev/null 2>&1; then
   grep -q "alias cat=bat" "$ZSHRC" || echo "alias cat=bat" >> "$ZSHRC"
+fi
+
+################################
+# eza via cargo
+################################
+echo "Installing eza..."
+if ! command -v eza >/dev/null 2>&1; then
+  cargo install eza
+fi
+
+# Add eza alias
+if command -v eza >/dev/null 2>&1; then
+  grep -q "alias ls=eza" "$ZSHRC" || echo "alias ls=eza" >> "$ZSHRC"
 fi
 
 ################################
