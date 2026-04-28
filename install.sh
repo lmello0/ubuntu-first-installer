@@ -289,9 +289,15 @@ ln -sf "/opt/pyenv/versions/$PYTHON_VERSION/bin/ipython" /usr/local/bin/ipython
 if ! grep -q "pyenv init" "$ZSHRC"; then
   cat >> "$ZSHRC" << 'EOF'
 
+# Ensure system-wide dev-tools env is loaded (WSL non-login shell fallback)
+if [ -f /etc/profile.d/dev-tools.sh ]; then
+  source /etc/profile.d/dev-tools.sh
+fi
+
 # pyenv shell integration (completions + rehash on cd)
-# PATH is set system-wide via /etc/profile.d/dev-tools.sh
-eval "$(pyenv init -)"
+if command -v pyenv >/dev/null 2>&1; then
+  eval "$(pyenv init -)"
+fi
 EOF
 fi
 
